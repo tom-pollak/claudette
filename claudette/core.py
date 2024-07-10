@@ -173,11 +173,13 @@ class Chat:
                  cli:Optional[Client]=None, # Client to use (leave empty if passing `model`)
                  sp='', # Optional system prompt
                  tools:Optional[list]=None, # List of tools to make available to Claude
+                 cont_pr:Optional[str]="...", # User prompt to continue an assistant response: assistant,[user:"..."],assistant
                  tool_choice:Optional[dict]=None): # Optionally force use of some tool
         "Anthropic chat client."
         assert model or cli
+        assert cont_pr != "", "cont_pr may not be an empty string"
         self.c = (cli or Client(model))
-        self.h,self.sp,self.tools,self.tool_choice = [],sp,tools,tool_choice
+        self.h,self.sp,self.tools,self.cont_pr,self.tool_choice = [],sp,tools,cont_pr,tool_choice
 
     @property
     def use(self): return self.c.use
@@ -190,6 +192,19 @@ def _stream(self:Chat, res):
 
 # %% ../00_core.ipynb 113
 @patch
+def _append_pr(self:Chat,
+               pr=None,  # Prompt / message
+              ):
+    prev_role = nested_idx(self.h, -1, 'role') if self.h else 'assistant' # First message should be 'user' if no history
+    if pr and prev_role == 'user':
+        self() # There's already a user request pending, so complete it
+    elif pr is None and prev_role == 'assistant':
+        if self.cont_pr is None:
+            raise ValueError("User prompt must be given after an assistant completion, or `self.cont_pr` must be specified.")
+        pr = self.cont_pr # No user prompt, keep the `assistant,[user:cont_pr],assistant` chain
+    if pr: self.h.append(mk_msg(pr))
+
+@patch
 def __call__(self:Chat,
              pr=None,  # Prompt / message
              temp=0, # Temperature
@@ -197,9 +212,7 @@ def __call__(self:Chat,
              stream=False, # Stream response?
              prefill='', # Optional prefill to pass to Claude as start of its response
              **kw):
-    if pr and self.h and nested_idx(self.h, -1, 'role')=='user':
-        self() # There's already a user request pending, so complete it
-    if pr: self.h.append(mk_msg(pr))
+    self._append_pr(pr)
     if self.tools: kw['tools'] = [get_schema(o) for o in self.tools]
     if self.tool_choice: kw['tool_choice'] = mk_tool_choice(self.tool_choice)
     res = self.c(self.h, stream=stream, prefill=prefill, sp=self.sp, temp=temp, maxtok=maxtok, **kw)
